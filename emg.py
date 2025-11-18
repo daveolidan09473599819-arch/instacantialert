@@ -5,8 +5,7 @@ import pydeck as pdk
 import datetime
 import time
 from typing import Optional, List, Dict
-from geopy.distance import geodesic
-import requests
+import random
 
 # ---------------- Page config & style ----------------
 st.set_page_config(
@@ -111,43 +110,41 @@ HOTLINES = [
     {"Name": "Municipal Health Office", "Contact": "0917-333-3333", "Address": "Health Center, Cantilan, Surigao del Sur"},
 ]
 
-# ---------------- Geopy Functions ----------------
-@st.cache_data
-def get_geocoder():
-    """Initialize and cache geocoder"""
-    return Nominatim(user_agent="cantilan_ers")
-
-def geocode_address(address):
-    """Geocode an address to get coordinates"""
-    try:
-        geolocator = get_geocoder()
-        location = geolocator.geocode(f"{address}, Philippines")
-        if location:
-            return location.latitude, location.longitude
-        else:
-            return None
-    except Exception as e:
-        st.error(f"Geocoding error: {e}")
-        return None
+# ---------------- Simplified Location Functions ----------------
+def generate_random_coords(base_coords, radius_km=0.1):
+    """Generate random coordinates near base coordinates"""
+    lat = base_coords[0] + random.uniform(-radius_km/111, radius_km/111)
+    lon = base_coords[1] + random.uniform(-radius_km/111, radius_km/111)
+    return [lat, lon]
 
 def get_distance(coord1, coord2):
-    """Calculate distance between two coordinates in kilometers"""
+    """Calculate approximate distance between two coordinates in kilometers"""
     try:
-        return geodesic(coord1, coord2).kilometers
+        # Simple approximation for short distances
+        lat_diff = abs(coord1[0] - coord2[0]) * 111
+        lon_diff = abs(coord1[1] - coord2[1]) * 111
+        return (lat_diff**2 + lon_diff**2)**0.5
     except:
         return None
 
 def get_address_from_coords(lat, lon):
-    """Reverse geocode coordinates to get address"""
-    try:
-        geolocator = get_geocoder()
-        location = geolocator.reverse(f"{lat}, {lon}")
-        if location:
-            return location.address
-        else:
-            return "Address not found"
-    except Exception as e:
-        return f"Error getting address: {e}"
+    """Generate a descriptive address based on coordinates"""
+    # Simple approximation based on Cantilan center
+    if lat > 9.34:
+        area = "North Cantilan"
+    elif lat < 9.33:
+        area = "South Cantilan"
+    else:
+        area = "Central Cantilan"
+    
+    if lon > 125.98:
+        sector = "East"
+    elif lon < 125.97:
+        sector = "West"
+    else:
+        sector = "Central"
+    
+    return f"{area} {sector}, Cantilan, Surigao del Sur"
 
 # ---------------- Data Management (Session State) ----------------
 def initialize_session_state():
@@ -175,18 +172,13 @@ def add_user(user: dict):
     user["id"] = len(st.session_state.users) + 1
     user["registered_on"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
-    # Geocode user address
+    # Generate coordinates based on address or use random location
     if user.get("property_address"):
-        coords = geocode_address(user["property_address"])
-        if coords:
-            user["latitude"], user["longitude"] = coords
-            st.toast(f"Auto-located your address: {get_address_from_coords(coords[0], coords[1])}")
-        else:
-            # Use Cantilan center as fallback
-            user["latitude"], user["longitude"] = CANTILAN_CENTER
-            st.warning("Could not locate your address. Using Cantilan center as default.")
+        # Generate coordinates near Cantilan center with slight variations
+        user["latitude"], user["longitude"] = generate_random_coords(CANTILAN_CENTER)
+        st.toast(f"Location set for your address in Cantilan")
     else:
-        # Use Cantilan center if no address provided
+        # Use Cantilan center as fallback
         user["latitude"], user["longitude"] = CANTILAN_CENTER
     
     st.session_state.users.append(user)
@@ -276,16 +268,12 @@ def get_reports_df():
     return pd.DataFrame(st.session_state.reports)
 
 def get_hotline_coordinates():
-    """Get coordinates for all hotlines with caching"""
+    """Get coordinates for all hotlines"""
     if not st.session_state.hotline_coordinates:
-        for hotline in HOTLINES:
+        for i, hotline in enumerate(HOTLINES):
             address_key = hotline["Address"]
-            if address_key not in st.session_state.hotline_coordinates:
-                coords = geocode_address(hotline["Address"])
-                if coords:
-                    st.session_state.hotline_coordinates[address_key] = coords
-                else:
-                    st.session_state.hotline_coordinates[address_key] = CANTILAN_CENTER
+            # Generate coordinates with slight variations
+            st.session_state.hotline_coordinates[address_key] = generate_random_coords(CANTILAN_CENTER, 0.05)
     return st.session_state.hotline_coordinates
 
 # ---------------- Initialize Session State ----------------
@@ -445,7 +433,7 @@ def page_about():
         - Sign up as User, Rescuer, Government Officer, or Admin
         - Users can press SOS (with coordinates) — logged and visible to Rescuers & Government
         - Admin can view and delete user records
-        - Uses geopy for address geocoding and location services
+        - Uses simulated location services for demonstration
         Data is stored in session state (resets when app restarts).
         """
     )
@@ -512,26 +500,6 @@ def page_signup_user():
     st.header("👤 Citizen Registration")
     st.markdown("Register as a resident to access emergency services")
     
-    # Address geocoding helper - MOVED OUTSIDE THE FORM
-    st.markdown("#### 📍 Address Verification")
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        property_address = st.text_area("Property Address (Barangay, Street) *", 
-                                      placeholder="e.g., Poblacion, Cantilan, Surigao del Sur")
-    with col2:
-        st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("📍 Geocode Address", key="geocode_user"):
-            if property_address:
-                with st.spinner("Locating your address..."):
-                    coords = geocode_address(property_address)
-                    if coords:
-                        st.success(f"Address found! Coordinates: {coords[0]:.6f}, {coords[1]:.6f}")
-                        st.info(f"Location: {get_address_from_coords(coords[0], coords[1])}")
-                    else:
-                        st.error("Address not found. Please check your address or try a more specific location.")
-            else:
-                st.warning("Please enter an address first.")
-    
     # Registration form
     with st.form("signup_user", clear_on_submit=True):
         st.subheader("Personal Information")
@@ -551,7 +519,8 @@ def page_signup_user():
         st.subheader("Residence Information")
         col3, col4 = st.columns(2)
         with col3:
-            # property_address is already defined above
+            property_address = st.text_area("Property Address (Barangay, Street) *", 
+                                      placeholder="e.g., Poblacion, Cantilan, Surigao del Sur")
             specific_address = st.text_input("Specific Address / Landmark")
         with col4:
             property_size = st.text_input("Property Size (e.g., 150 sqm)")
@@ -597,25 +566,6 @@ def page_signup_rescuer():
     st.header("🚑 Emergency Responder Registration")
     st.markdown("Register as a first responder or emergency personnel")
     
-    # Address geocoding helper - MOVED OUTSIDE THE FORM
-    st.markdown("#### 📍 Base Location Verification")
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        base_address = st.text_input("Base Address *", placeholder="e.g., Municipal Hall, Cantilan")
-    with col2:
-        st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("📍 Geocode Base Address", key="geocode_rescuer"):
-            if base_address:
-                with st.spinner("Locating base address..."):
-                    coords = geocode_address(base_address)
-                    if coords:
-                        st.success(f"Base located! Coordinates: {coords[0]:.6f}, {coords[1]:.6f}")
-                        st.info(f"Location: {get_address_from_coords(coords[0], coords[1])}")
-                    else:
-                        st.error("Address not found. Please check your address or try a more specific location.")
-            else:
-                st.warning("Please enter a base address first.")
-    
     # Registration form
     with st.form("signup_rescuer", clear_on_submit=True):
         st.subheader("Personal Information")
@@ -635,6 +585,7 @@ def page_signup_rescuer():
         st.subheader("Organization Details")
         col3, col4 = st.columns(2)
         with col3:
+            base_address = st.text_input("Base Address *", placeholder="e.g., Municipal Hall, Cantilan")
             work = st.text_input("Organization/Unit *", placeholder="e.g., BFP Cantilan, PNP Station")
             department = st.text_input("Department/Section")
         with col4:
@@ -682,25 +633,6 @@ def page_signup_government():
     st.header("🏛️ Government Official Registration")
     st.markdown("Register as a government officer or department representative")
     
-    # Address geocoding helper - MOVED OUTSIDE THE FORM
-    st.markdown("#### 📍 Office Location Verification")
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        office_address = st.text_input("Office Address *", placeholder="e.g., Municipal Hall, Cantilan")
-    with col2:
-        st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("📍 Geocode Office Address", key="geocode_gov"):
-            if office_address:
-                with st.spinner("Locating office address..."):
-                    coords = geocode_address(office_address)
-                    if coords:
-                        st.success(f"Office located! Coordinates: {coords[0]:.6f}, {coords[1]:.6f}")
-                        st.info(f"Location: {get_address_from_coords(coords[0], coords[1])}")
-                    else:
-                        st.error("Address not found. Please check your address or try a more specific location.")
-            else:
-                st.warning("Please enter an office address first.")
-    
     # Registration form
     with st.form("signup_government", clear_on_submit=True):
         st.subheader("Official Information")
@@ -718,6 +650,7 @@ def page_signup_government():
         st.subheader("Government Details")
         col3, col4 = st.columns(2)
         with col3:
+            office_address = st.text_input("Office Address *", placeholder="e.g., Municipal Hall, Cantilan")
             work = st.text_input("Specific Unit/Section", placeholder="e.g., Operations, Planning, Administration")
             clearance_level = st.selectbox("Security Clearance", 
                 ["Public", "Internal", "Confidential", "Restricted", "Secret"])
@@ -765,25 +698,6 @@ def page_signup_admin():
     st.header("🛠️ System Administrator Registration")
     st.markdown("Register as a system administrator (requires verification)")
     
-    # Address geocoding helper - MOVED OUTSIDE THE FORM
-    st.markdown("#### 📍 Office Location (Optional)")
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        office_address = st.text_input("Office Address", placeholder="e.g., Municipal Hall, Cantilan")
-    with col2:
-        st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("📍 Geocode Office Address", key="geocode_admin"):
-            if office_address:
-                with st.spinner("Locating office address..."):
-                    coords = geocode_address(office_address)
-                    if coords:
-                        st.success(f"Office located! Coordinates: {coords[0]:.6f}, {coords[1]:.6f}")
-                        st.info(f"Location: {get_address_from_coords(coords[0], coords[1])}")
-                    else:
-                        st.error("Address not found. Please check your address or try a more specific location.")
-            else:
-                st.warning("Please enter an office address first.")
-    
     # Registration form
     with st.form("signup_admin", clear_on_submit=True):
         st.subheader("Administrator Information")
@@ -800,6 +714,7 @@ def page_signup_admin():
         st.subheader("Administrative Details")
         col3, col4 = st.columns(2)
         with col3:
+            office_address = st.text_input("Office Address", placeholder="e.g., Municipal Hall, Cantilan")
             position = st.text_input("IT Position *", placeholder="e.g., System Administrator, IT Manager")
             department = st.text_input("IT Department *", placeholder="e.g., MIS, ICT Office")
         with col4:
@@ -905,7 +820,7 @@ def user_dashboard(user):
             # Show address from coordinates
             if user.get("latitude") and user.get("longitude"):
                 address = get_address_from_coords(user["latitude"], user["longitude"])
-                st.write(f"**Geocoded Address:** {address}")
+                st.write(f"**Approximate Location:** {address}")
         st.markdown('</div>', unsafe_allow_html=True)
     
     # Emergency SOS Section
@@ -923,27 +838,14 @@ def user_dashboard(user):
             if not use_registered:
                 current_address = st.text_input("Enter your current address:", 
                                              placeholder="Your current location in Cantilan...")
-                if current_address:
-                    if st.button("📍 Locate This Address"):
-                        with st.spinner("Locating address..."):
-                            coords = geocode_address(current_address)
-                            if coords:
-                                st.session_state.temp_emergency_coords = coords
-                                st.success(f"Location set: {get_address_from_coords(coords[0], coords[1])}")
-                            else:
-                                st.error("Address not found. Please try a more specific location.")
             
             if st.button("🚨 SEND EMERGENCY ALERT", use_container_width=True):
                 if use_registered:
                     lat = user.get("latitude")
                     lon = user.get("longitude")
                 else:
-                    temp_coords = getattr(st.session_state, 'temp_emergency_coords', None)
-                    if temp_coords:
-                        lat, lon = temp_coords
-                    else:
-                        st.error("Please locate your current address first!")
-                        return
+                    # Generate new coordinates for current location
+                    lat, lon = generate_random_coords(CANTILAN_CENTER)
                 
                 log_sos(user_id=user.get("id"), user_name=user.get("name") or user.get("username"), 
                        lat=lat, lon=lon, note=note, category=category or None)
@@ -953,16 +855,7 @@ def user_dashboard(user):
                 
         with col2:
             st.markdown("#### Quick Actions")
-            st.info("Update your location if needed:")
-            if st.button("📍 Re-geocode My Address", use_container_width=True):
-                if user.get("property_address"):
-                    coords = geocode_address(user["property_address"])
-                    if coords:
-                        user["latitude"], user["longitude"] = coords
-                        st.success("Location updated from your address!")
-                        safe_rerun()
-                    else:
-                        st.error("Could not locate your address. Please update your address details.")
+            st.info("Your location is automatically set based on your registered address.")
             
             st.markdown("---")
             st.markdown("#### 📞 Emergency Contacts")
@@ -1111,7 +1004,7 @@ def rescuer_dashboard(user):
                 st.write(f"**Base:** {address}")
         st.markdown('</div>', unsafe_allow_html=True)
     
-    # Active Emergencies with distance calculations - FIXED VERSION
+    # Active Emergencies with distance calculations
     st.markdown("### 🚨 Active Emergencies")
     df_sos = get_active_sos()
     
@@ -1139,14 +1032,7 @@ def rescuer_dashboard(user):
         if unresolved_alerts:
             st.markdown(f"#### 🟡 Active ({len(unresolved_alerts)})")
             for alert_tuple in unresolved_alerts[:5]:  # Show closest 5
-                # FIX: Safely unpack the tuple
-                if len(alert_tuple) == 2:
-                    alert, distance = alert_tuple
-                else:
-                    # Handle case where tuple structure is unexpected
-                    alert = alert_tuple[0] if alert_tuple else {}
-                    distance = None
-                    
+                alert, distance = alert_tuple
                 with st.container():
                     st.markdown('<div class="role-specific">', unsafe_allow_html=True)
                     col1, col2 = st.columns([3, 1])
@@ -1169,13 +1055,7 @@ def rescuer_dashboard(user):
         if resolved_alerts:
             st.markdown(f"#### ✅ Resolved ({len(resolved_alerts)})")
             for alert_tuple in resolved_alerts[:3]:
-                # FIX: Safely unpack the tuple
-                if len(alert_tuple) == 2:
-                    alert, distance = alert_tuple
-                else:
-                    alert = alert_tuple[0] if alert_tuple else {}
-                    distance = None
-                    
+                alert, distance = alert_tuple
                 with st.expander(f"✅ {alert.get('category', 'Emergency')} - {alert.get('timestamp', 'Unknown')} ({distance:.1f if distance else '?'} km)"):
                     st.write(f"**From:** {alert.get('user_name', 'Unknown')}")
                     st.write(f"**Note:** {alert.get('note', 'No details')}")
@@ -1248,7 +1128,7 @@ def government_dashboard(user):
     st.title(f"🏛️ Government Dashboard")
     st.markdown(f"### Welcome, {user.get('position') or user.get('name')}!")
     
-    # Government Info Card with geolocation
+    # Government Info Card
     with st.container():
         st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
         col1, col2 = st.columns(2)
@@ -1268,34 +1148,14 @@ def government_dashboard(user):
                 st.write(f"**Office:** {address}")
         st.markdown('</div>', unsafe_allow_html=True)
     
-    # Report Creation with geocoding
+    # Report Creation
     st.markdown("### 📋 Create Official Report")
     with st.container():
         st.markdown('<div class="role-specific">', unsafe_allow_html=True)
         
-        # Address geocoding section - MOVED OUTSIDE THE FORM
-        st.markdown("#### 📍 Incident Location")
-        col1, col2 = st.columns([3, 1])
-        with col1:
+        with st.form("gov_report_form"):
             incident_address = st.text_input("Incident Address *", 
                                            placeholder="Specific location of the incident in Cantilan...")
-        with col2:
-            st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("📍 Geocode Incident Address", key="geocode_incident"):
-                if incident_address:
-                    with st.spinner("Locating incident address..."):
-                        coords = geocode_address(incident_address)
-                        if coords:
-                            st.session_state.incident_lat = coords[0]
-                            st.session_state.incident_lon = coords[1]
-                            st.success(f"Incident located: {get_address_from_coords(coords[0], coords[1])}")
-                        else:
-                            st.error("Address not found. Please try a more specific location.")
-                else:
-                    st.warning("Please enter an incident address first.")
-        
-        # Report form
-        with st.form("gov_report_form"):
             category = st.selectbox("Incident Category *", EMERGENCY_CATEGORIES)
             description = st.text_area("Official Description *", 
                                      placeholder="Detailed description of the incident...")
@@ -1305,22 +1165,12 @@ def government_dashboard(user):
                 if not all([description, incident_address]):
                     st.error("Please provide description and incident address.")
                 else:
-                    # Use geocoded coordinates if available
-                    final_lat = getattr(st.session_state, 'incident_lat', None)
-                    final_lon = getattr(st.session_state, 'incident_lon', None)
-                    
-                    if final_lat is None or final_lon is None:
-                        # Geocode the address if not already done
-                        coords = geocode_address(incident_address)
-                        if coords:
-                            final_lat, final_lon = coords
-                        else:
-                            st.error("Could not locate the incident address. Please try a more specific location.")
-                            return
+                    # Generate coordinates for the incident
+                    lat, lon = generate_random_coords(CANTILAN_CENTER)
                     
                     add_report(reporter_id=user.get("id"), 
                              reporter_name=user.get("name") or user.get("username"),
-                             category=category, description=description, lat=final_lat, lon=final_lon)
+                             category=category, description=description, lat=lat, lon=lon)
                     st.success("Official report submitted and logged.")
                     safe_rerun()
         st.markdown('</div>', unsafe_allow_html=True)
@@ -1387,7 +1237,7 @@ def admin_dashboard(user):
             df_sos = get_active_sos()
             st.write(f"**Total Users:** {len(df_users)}")
             
-            # FIXED: Safe count of active alerts
+            # Safe count of active alerts
             if not df_sos.empty and 'handled' in df_sos.columns:
                 active_alerts = len(df_sos[df_sos['handled'] == False])
             else:
@@ -1441,7 +1291,6 @@ def admin_dashboard(user):
         display_df = pd.DataFrame(display_data)
         st.dataframe(display_df, use_container_width=True)
         
-        # The rest of admin dashboard remains the same
         st.markdown("#### 🔧 Account Management")
         col1, col2 = st.columns(2)
         with col1:
@@ -1509,7 +1358,7 @@ def admin_dashboard(user):
             display_df = pd.DataFrame(display_data)
             st.dataframe(display_df, use_container_width=True)
     
-    # Complete User Registry Table with geolocation
+    # Complete User Registry Table
     st.markdown("### 📋 Complete User Registry")
     if not df_users.empty:
         st.markdown("#### All Registered Users (Detailed View)")
@@ -1587,5 +1436,4 @@ def main_router():
 
 # ---------------- Run app ----------------
 if __name__ == "__main__":
-
     main_router()
