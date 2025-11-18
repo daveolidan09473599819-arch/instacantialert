@@ -5,7 +5,6 @@ import pydeck as pdk
 import datetime
 import time
 from typing import Optional, List, Dict
-from geopy.geocoders import Nominatim
 from geopy.distance import geodesic
 import requests
 
@@ -1588,4 +1587,5 @@ def main_router():
 
 # ---------------- Run app ----------------
 if __name__ == "__main__":
+
     main_router()
